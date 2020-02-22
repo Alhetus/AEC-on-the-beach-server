@@ -89,55 +89,21 @@ Methods of class RawKinectViewer:
 
 void RawKinectViewer::mapDepth(unsigned int x, unsigned int y, float depth, GLubyte *result) const
 {
-	if (false /*depthPlaneValid*/)
+	/* Color depth pixels by depth value: */
+	static const GLubyte mapColors[6][3] =
 	{
-		/* Color depth pixels by distance to the depth plane: */
-		float dist = camDepthPlane.calcDistance(Plane::Point(float(x) + 0.5f, float(y) + 0.5f, depth));
-		if (dist >= 0.0f)
-		{
-			GLubyte col = dist < depthPlaneDistMax ? 255U - GLubyte((dist * 255.0f) / depthPlaneDistMax + 0.5f) : 0U;
-			result[0] = col;
-			result[1] = col;
-			result[2] = 255U;
-		}
-		else
-		{
-			GLubyte col = -dist < depthPlaneDistMax ? 255U - GLubyte((-dist * 255.0f) / depthPlaneDistMax + 0.5f) : 0U;
-			result[0] = 255U;
-			result[1] = col;
-			result[2] = col;
-		}
-	}
-	else
-	{
-		/* Color depth pixels by depth value: */
-		static const GLubyte mapColors[6][3] =
-			{
-				{255, 0, 0},
-				{255, 255, 0},
-				{0, 255, 0},
-				{0, 255, 255},
-				{0, 0, 255},
-				{255, 0, 255}};
-		float d = (depth - depthValueRange[0]) * 5.0f / (depthValueRange[1] - depthValueRange[0]);
-		if (d <= 0.0f)
-		{
-			for (int i = 0; i < 3; ++i)
-				result[i] = GLubyte(mapColors[0][i] * 0.2f);
-		}
-		else if (d >= 5.0f)
-		{
-			for (int i = 0; i < 3; ++i)
-				result[i] = mapColors[5][i];
-		}
-		else
-		{
-			int i0 = int(d);
-			d -= float(i0);
-			for (int i = 0; i < 3; ++i)
-				result[i] = GLubyte((mapColors[i0][i] * (1.0f - d) + mapColors[i0 + 1][i] * d) * (d * 0.8f + 0.2f));
-		}
-	}
+		{255, 0, 0},
+		{255, 255, 0},
+		{0, 255, 0},
+		{0, 255, 255},
+		{0, 0, 255},
+		{255, 0, 255}
+	};
+	
+	float d = (depth - depthValueRange[0]) * 255 / (depthValueRange[1] - depthValueRange[0]);
+	
+	for (int i = 0; i < 3; ++i)
+		result[i] = GLubyte(floor(d));
 }
 
 Vrui::Point RawKinectViewer::calcImagePoint(const Vrui::Ray &physicalRay) const
@@ -1055,47 +1021,45 @@ void RawKinectViewer::display(GLContextData &contextData) const
 	/* Bind the depth texture object: */
 	glBindTexture(GL_TEXTURE_2D, dataItem->depthTextureId);
 
-	/* Check if the cached depth frame needs to be updated: */
-	if (showAverageFrame && averageFrameValid)
+	if (dataItem->depthFrameVersion != depthFrameVersion)
 	{
-		/* Convert the averaged depth image to RGB: */
+		/* Upload the depth frame into the texture object: */
+		const Kinect::FrameBuffer &depthFrame = depthFrames.getLockedValue();
 		unsigned int width = depthFrameSize[0];
 		unsigned int height = depthFrameSize[1];
+		const GLushort *framePtr = depthFrame.getData<GLushort>();
+
+		// GLushort framePtr[width*height];
+		// std::fill_n(framePtr, width * height, 32000);
+
+		/* Convert the depth image to unsigned byte: */
 		GLubyte *byteFrame = new GLubyte[height * width * 3];
-		const float *afdPtr = averageFrameDepth;
-		const float *affPtr = averageFrameForeground;
-		float foregroundCutoff = float(averageNumFrames) * 0.5f;
+		const GLushort *fPtr = framePtr;
 		GLubyte *bfPtr = byteFrame;
-		if (depthCorrection != 0)
+
+		GLubyte *resultFrame = new GLubyte[height * width];
+		GLubyte *rPtr = resultFrame;
+
+		const PixelCorrection *dcPtr = depthCorrection;
+		
+		for (unsigned int y = 0; y < height; ++y)
 		{
-			const PixelCorrection *dcPtr = depthCorrection;
-			for (unsigned int y = 0; y < height; ++y)
+			for (unsigned int x = 0; x < width; ++x, ++fPtr, ++dcPtr, bfPtr += 3, ++rPtr)
 			{
-				for (unsigned int x = 0; x < width; ++x, ++afdPtr, ++affPtr, ++dcPtr, bfPtr += 3)
+				if (*fPtr != Kinect::FrameSource::invalidDepth)
 				{
-					if (*affPtr >= foregroundCutoff)
-					{
-						float d = dcPtr->correct((*afdPtr) / (*affPtr));
-						mapDepth(x, y, d, bfPtr);
-					}
-					else
-						bfPtr[0] = bfPtr[1] = bfPtr[2] = GLubyte(0);
+					float d = dcPtr->correct(*fPtr);
+
+					float depth = (d - depthValueRange[0]) * 255 / (depthValueRange[1] - depthValueRange[0]);
+					*rPtr = GLubyte(floor(depth));
+
+					mapDepth(x, y, d, bfPtr);
 				}
-			}
-		}
-		else
-		{
-			for (unsigned int y = 0; y < height; ++y)
-			{
-				for (unsigned int x = 0; x < width; ++x, ++afdPtr, ++affPtr, bfPtr += 3)
+				else
 				{
-					if (*affPtr >= foregroundCutoff)
-					{
-						float d = (*afdPtr) / (*affPtr);
-						mapDepth(x, y, d, bfPtr);
-					}
-					else
-						bfPtr[0] = bfPtr[1] = bfPtr[2] = GLubyte(0);
+					*rPtr = 255;
+
+					bfPtr[0] = bfPtr[1] = bfPtr[2] = GLubyte(0);
 				}
 			}
 		}
@@ -1112,92 +1076,15 @@ void RawKinectViewer::display(GLContextData &contextData) const
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, byteFrame);
 
 		/* Write the depth texture bytes to socket */
-		// int n = write(clientSockFd, byteFrame, width * height * 3 * sizeof(GLubyte));
+		int n = write(clientSockFd, resultFrame, width * height * sizeof(GLubyte));
 
-		// if (n < 0)
-		//	perror("error writing to socket");
+		if (n < 0)
+			perror("error writing to socket");
 
-		/* delete the frame, not needed anymore */
 		delete[] byteFrame;
-	}
-	else
-	{
-		if (dataItem->depthFrameVersion != depthFrameVersion)
-		{
-			/* Upload the depth frame into the texture object: */
-			const Kinect::FrameBuffer &depthFrame = depthFrames.getLockedValue();
-			unsigned int width = depthFrameSize[0];
-			unsigned int height = depthFrameSize[1];
-			const GLushort *framePtr = depthFrame.getData<GLushort>();
 
-			// GLushort framePtr[width*height];
-			// std::fill_n(framePtr, width * height, 32000);
-
-			/* Convert the depth image to unsigned byte: */
-			GLubyte *byteFrame = new GLubyte[height * width * 3];
-			const GLushort *fPtr = framePtr;
-			GLubyte *bfPtr = byteFrame;
-
-			if (depthCorrection != 0)
-			{
-				const PixelCorrection *dcPtr = depthCorrection;
-				
-				for (unsigned int y = 0; y < height; ++y)
-				{
-					for (unsigned int x = 0; x < width; ++x, ++fPtr, ++dcPtr, bfPtr += 3)
-					{
-						if (*fPtr != Kinect::FrameSource::invalidDepth)
-						{
-							float d = dcPtr->correct(*fPtr);
-							mapDepth(x, y, d, bfPtr);
-						}
-						else
-						{
-							bfPtr[0] = bfPtr[1] = bfPtr[2] = GLubyte(0);
-						}
-					}
-				}
-			}
-			else
-			{
-				for (unsigned int y = 0; y < height; ++y)
-				{
-					for (unsigned int x = 0; x < width; ++x, ++fPtr, bfPtr += 3)
-					{
-						if (*fPtr != Kinect::FrameSource::invalidDepth)
-						{
-							mapDepth(x, y, *fPtr, bfPtr);
-						}
-						else
-						{
-							bfPtr[0] = bfPtr[1] = bfPtr[2] = GLubyte(0);
-						}
-					}
-				}
-			}
-
-			/* Set up the texture parameters: */
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-
-			/* Upload the depth texture image: */
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, byteFrame);
-
-			/* Write the depth texture bytes to socket */
-			int n = write(clientSockFd, byteFrame, width * height * 3 * sizeof(GLubyte));
-
-			if (n < 0)
-				perror("error writing to socket");
-
-			delete[] byteFrame;
-
-			/* Mark the cached depth frame as up-to-date: */
-			dataItem->depthFrameVersion = depthFrameVersion;
-		}
+		/* Mark the cached depth frame as up-to-date: */
+		dataItem->depthFrameVersion = depthFrameVersion;
 	}
 
 	/* Draw the depth image: */

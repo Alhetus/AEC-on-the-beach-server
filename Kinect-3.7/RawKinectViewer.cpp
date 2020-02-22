@@ -1037,30 +1037,31 @@ void RawKinectViewer::display(GLContextData &contextData) const
 		const GLushort *fPtr = framePtr;
 		GLubyte *bfPtr = byteFrame;
 
-		GLubyte *resultFrame = new GLubyte[height * width];
-		GLubyte *rPtr = resultFrame;
+		GLint *resultFrame = new GLint[height * width];
 
 		const PixelCorrection *dcPtr = depthCorrection;
+
+		int counter = 0;
 		
 		for (unsigned int y = 0; y < height; ++y)
 		{
-			for (unsigned int x = 0; x < width; ++x, ++fPtr, ++dcPtr, bfPtr += 3, ++rPtr)
+			for (unsigned int x = 0; x < width; ++x, ++fPtr, ++dcPtr, bfPtr += 3)
 			{
 				if (*fPtr != Kinect::FrameSource::invalidDepth)
 				{
 					float d = dcPtr->correct(*fPtr);
-
-					float depth = (d - depthValueRange[0]) * 255 / (depthValueRange[1] - depthValueRange[0]);
-					*rPtr = GLubyte(floor(depth));
+					resultFrame[counter] = GLint(floor(d));
 
 					mapDepth(x, y, d, bfPtr);
 				}
 				else
 				{
-					*rPtr = 255;
+					resultFrame[counter] = 0;
 
 					bfPtr[0] = bfPtr[1] = bfPtr[2] = GLubyte(0);
 				}
+
+				counter++;
 			}
 		}
 
@@ -1076,7 +1077,7 @@ void RawKinectViewer::display(GLContextData &contextData) const
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, byteFrame);
 
 		/* Write the depth texture bytes to socket */
-		int n = write(clientSockFd, resultFrame, width * height * sizeof(GLubyte));
+		int n = write(clientSockFd, resultFrame, width * height * sizeof(GLint));
 
 		if (n < 0)
 			perror("error writing to socket");

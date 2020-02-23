@@ -1029,9 +1029,6 @@ void RawKinectViewer::display(GLContextData &contextData) const
 		unsigned int height = depthFrameSize[1];
 		const GLushort *framePtr = depthFrame.getData<GLushort>();
 
-		// GLushort framePtr[width*height];
-		// std::fill_n(framePtr, width * height, 32000);
-
 		/* Convert the depth image to unsigned byte: */
 		GLubyte *byteFrame = new GLubyte[height * width * 3];
 		const GLushort *fPtr = framePtr;
@@ -1083,6 +1080,7 @@ void RawKinectViewer::display(GLContextData &contextData) const
 			perror("error writing to socket");
 
 		delete[] byteFrame;
+		delete[] resultFrame;
 
 		/* Mark the cached depth frame as up-to-date: */
 		dataItem->depthFrameVersion = depthFrameVersion;
